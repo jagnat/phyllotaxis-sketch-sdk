@@ -1,0 +1,181 @@
+#!/bin/sh
+set -eu
+
+sdk_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+config_file=${PHYLLO_ENV_FILE:-$sdk_dir/.phyllo.env}
+if [ -r "$config_file" ]; then
+    # Configuration is trusted shell syntax and is deliberately not committed.
+    . "$config_file"
+fi
+
+usage() {
+    printf '%s\n' \
+        'usage:' \
+        '  ./phyllo doctor' \
+        '  ./phyllo new <rust|c|assemblyscript> <directory>' \
+        '  ./phyllo build <rust|c|assemblyscript|directory>' \
+        '  ./phyllo check <file.wasm>' \
+        '  ./phyllo simulate [port]' \
+        '  ./phyllo upload <rust|c|assemblyscript|directory>' \
+        '  ./phyllo list|health|run|delete|main' >&2
+    exit 2
+}
+
+command_name=${1:-}
+[ -n "$command_name" ] || usage
+
+resolve_target() {
+    target=${1:-}
+    [ -n "$target" ] || usage
+    case "$target" in
+        rust|c|assemblyscript)
+            project_dir=$sdk_dir/templates/$target
+            output_name=$target
+            language=$target
+            ;;
+        *)
+            project_dir=$(CDPATH= cd -- "$target" && pwd) || exit 2
+            output_name=$(basename "$project_dir" | tr -cd 'A-Za-z0-9._-')
+            if [ -f "$project_dir/Cargo.toml" ]; then language=rust
+            elif [ -f "$project_dir/Makefile" ]; then language=c
+            elif [ -f "$project_dir/asconfig.json" ]; then language=assemblyscript
+            else
+                printf 'cannot detect sketch language in %s\n' "$project_dir" >&2
+                exit 2
+            fi
+            ;;
+    esac
+}
+
+build_target() {
+    resolve_target "$1"
+    mkdir -p "$sdk_dir/dist"
+    output=$sdk_dir/dist/$output_name.wasm
+    case "$language" in
+        rust)
+            (cd "$project_dir" && cargo build --locked --release --target wasm32-unknown-unknown)
+            package_name=$(sed -n 's/^name = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | head -1 | tr '-' '_')
+            cp "$project_dir/target/wasm32-unknown-unknown/release/$package_name.wasm" "$output"
+            ;;
+        c)
+            make -C "$project_dir" OUTPUT="$output" >&2
+            ;;
+        assemblyscript)
+            if [ ! -x "$project_dir/node_modules/.bin/asc" ]; then
+                npm --prefix "$project_dir" install --ignore-scripts
+            fi
+            npm --prefix "$project_dir" run build -- --outFile "$output" >&2
+            ;;
+    esac
+    printf '%s\n' "$output"
+}
+
+curl_api() {
+    curl --fail-with-body --silent --show-error --noproxy '*' \
+        --connect-timeout 10 --max-time 30 "$@"
+}
+
+base_url() {
+    case ${PHYLLO_HOST:-} in
+        http://*|https://*) printf '%s' "${PHYLLO_HOST%/}" ;;
+        '') printf '%s\n' 'PHYLLO_HOST is not configured' >&2; exit 2 ;;
+        *) printf 'http://%s' "${PHYLLO_HOST%/}" ;;
+    esac
+}
+
+check_slot() {
+    case ${PHYLLO_SLOT:-} in
+        ''|*[!0-9]*) printf '%s\n' 'PHYLLO_SLOT must be 0..99' >&2; exit 2 ;;
+    esac
+    [ "$PHYLLO_SLOT" -le 99 ] || { printf '%s\n' 'PHYLLO_SLOT must be 0..99' >&2; exit 2; }
+}
+
+case "$command_name" in
+    doctor)
+        failed=0
+        for tool_name in cargo rustup node npm make curl python3; do
+            if command -v "$tool_name" >/dev/null 2>&1; then
+                printf 'ok       %s\n' "$tool_name"
+            else
+                printf 'missing  %s\n' "$tool_name"
+                failed=1
+            fi
+        done
+        wasm_clang=clang
+        if [ -x /opt/homebrew/opt/llvm/bin/clang ]; then wasm_clang=/opt/homebrew/opt/llvm/bin/clang
+        elif [ -x /usr/local/opt/llvm/bin/clang ]; then wasm_clang=/usr/local/opt/llvm/bin/clang
+        fi
+        if command -v "$wasm_clang" >/dev/null 2>&1 && printf 'int x;' | "$wasm_clang" --target=wasm32 -x c -c -o /dev/null - >/dev/null 2>&1; then
+            printf 'ok       clang (wasm32 target: %s)\n' "$wasm_clang"
+        else
+            printf 'missing  clang with wasm32 target (install LLVM)\n'
+            failed=1
+        fi
+        if command -v wasm-ld >/dev/null 2>&1 || command -v rustc >/dev/null 2>&1; then
+            printf 'ok       WASM linker\n'
+        else
+            printf 'missing  wasm-ld (install LLD)\n'
+            failed=1
+        fi
+        if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+            printf 'ok       Rust wasm32-unknown-unknown target\n'
+        else
+            printf 'missing  Rust wasm target (rustup target add wasm32-unknown-unknown)\n'
+            failed=1
+        fi
+        exit "$failed"
+        ;;
+    new)
+        language=${2:-}
+        destination=${3:-}
+        case "$language" in rust|c|assemblyscript) ;; *) usage ;; esac
+        [ -n "$destination" ] || usage
+        [ ! -e "$destination" ] || { printf 'destination already exists: %s\n' "$destination" >&2; exit 2; }
+        mkdir -p "$destination/tools" "$destination/simulator"
+        cp -R "$sdk_dir/templates/$language/." "$destination/"
+        rm -rf "$destination/target" "$destination/build" "$destination/node_modules"
+        cp "$sdk_dir/phyllo" "$destination/phyllo"
+        cp "$sdk_dir/.phyllo.env.example" "$destination/.phyllo.env.example"
+        cp "$sdk_dir/tools/check-wasm.mjs" "$sdk_dir/tools/positions.mjs" "$destination/tools/"
+        cp "$sdk_dir/simulator/index.html" "$sdk_dir/simulator/simulator.js" "$destination/simulator/"
+        printf 'created %s sketch in %s\n' "$language" "$destination"
+        ;;
+    build)
+        build_target "${2:-}"
+        ;;
+    check)
+        [ -n "${2:-}" ] || usage
+        node "$sdk_dir/tools/check-wasm.mjs" "$2"
+        ;;
+    simulate)
+        port=${2:-8000}
+        case "$port" in *[!0-9]*|'') usage ;; esac
+        printf 'Simulator: http://localhost:%s/simulator/\n' "$port"
+        printf '%s\n' 'Press Ctrl-C to stop.'
+        cd "$sdk_dir"
+        python3 -m http.server "$port" --bind 127.0.0.1
+        ;;
+    upload)
+        check_slot
+        output=$(build_target "${2:-}")
+        node "$sdk_dir/tools/check-wasm.mjs" "$output"
+        name=${PHYLLO_NAME:-}
+        color=${PHYLLO_COLOR:-#be28ff}
+        case "$name" in ''|*[!A-Za-z0-9._-]*) printf '%s\n' 'PHYLLO_NAME is required and may contain only A-Z, a-z, 0-9, ., _, -' >&2; exit 2 ;; esac
+        [ "${#name}" -le 32 ] || { printf '%s\n' 'PHYLLO_NAME must be at most 32 characters' >&2; exit 2; }
+        case "$color" in
+            \#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+            *) printf '%s\n' 'PHYLLO_COLOR must look like #be28ff' >&2; exit 2 ;;
+        esac
+        curl_api -X POST -H 'Content-Type: application/wasm' \
+            -H "X-Phyllo-Color: $color" --data-binary "@$output" \
+            "$(base_url)/api/sketches/$PHYLLO_SLOT/$name"
+        printf '\n'
+        ;;
+    list) curl_api "$(base_url)/api/sketches"; printf '\n' ;;
+    health) curl_api "$(base_url)/api/health"; printf '\n' ;;
+    run) check_slot; curl_api -X POST "$(base_url)/api/run/$PHYLLO_SLOT"; printf '\n' ;;
+    delete) check_slot; curl_api -X DELETE "$(base_url)/api/sketches/$PHYLLO_SLOT"; printf '\n' ;;
+    main) curl_api -X POST "$(base_url)/api/select/0"; printf '\n' ;;
+    *) usage ;;
+esac

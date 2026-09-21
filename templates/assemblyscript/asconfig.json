@@ -1,0 +1,16 @@
+{
+  "options": {
+    "optimizeLevel": 3,
+    "shrinkLevel": 2,
+    "converge": true,
+    "noAssert": true,
+    "runtime": "stub",
+    "exportRuntime": false,
+    "use": ["abort=assembly/index/phylloAbort"]
+  },
+  "targets": {
+    "release": {
+      "outFile": "build/sketch.wasm"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "phyllotaxis-assemblyscript-sketch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "asc assembly/index.ts --config asconfig.json"
+  },
+  "devDependencies": {
+    "assemblyscript": "0.28.20"
+  }
+}
+

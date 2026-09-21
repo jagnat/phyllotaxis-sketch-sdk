@@ -1,0 +1,34 @@
+name: templates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: templates/assemblyscript/package-lock.json
+      - name: Install C WASM toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - name: Install AssemblyScript
+        run: npm ci --prefix templates/assemblyscript --ignore-scripts
+      - name: Build templates
+        run: |
+          ./phyllo build rust
+          ./phyllo build c
+          ./phyllo build assemblyscript
+      - name: Check ABI conformance
+        run: |
+          ./phyllo check dist/rust.wasm
+          ./phyllo check dist/c.wasm
+          ./phyllo check dist/assemblyscript.wasm
+

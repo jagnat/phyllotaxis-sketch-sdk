@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phyllotaxis Sketch Simulator</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.45 system-ui, sans-serif; background: #0b0a10; color: #eeeaf6; }
+    body { margin: 0; min-height: 100vh; display: grid; grid-template-columns: minmax(320px, 1fr) minmax(260px, 380px); }
+    main { display: grid; place-items: center; padding: 2rem; background: radial-gradient(circle, #1d1729 0, #09080d 65%); }
+    canvas { width: min(78vh, 78vw); height: min(78vh, 78vw); max-width: 760px; max-height: 760px; }
+    aside { padding: 1.5rem; background: #15121c; box-shadow: -12px 0 40px #0008; overflow: auto; }
+    h1 { font-size: 1.3rem; margin: 0 0 .4rem; } p { color: #bdb5cb; }
+    label { display: block; margin: 1rem 0 .3rem; color: #d9d1e5; }
+    input[type=file] { width: 100%; }
+    input[type=range] { width: 100%; accent-color: #be28ff; }
+    button { border: 1px solid #5c4a70; border-radius: .5rem; padding: .65rem .9rem; color: inherit; background: #2b2038; cursor: pointer; }
+    button:hover { background: #39284c; }
+    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    .bands { display: grid; grid-template-columns: repeat(6, 1fr); gap: .4rem; }
+    .bands label { font-size: .72rem; text-align: center; margin: .6rem 0 0; }
+    .bands input { writing-mode: vertical-lr; direction: rtl; height: 105px; }
+    #status { min-height: 2.8rem; padding: .7rem; border-radius: .4rem; background: #0c0a10; font: .82rem/1.4 ui-monospace, monospace; color: #aef5bb; }
+    small { color: #978da6; }
+    @media (max-width: 760px) { body { grid-template-columns: 1fr; } aside { box-shadow: 0 -12px 40px #0008; } canvas { width: 90vw; height: 90vw; } }
+  </style>
+</head>
+<body>
+  <main><canvas id="board" width="800" height="800" aria-label="90 LED board preview"></canvas></main>
+  <aside>
+    <h1>Phyllotaxis simulator</h1>
+    <p>Load an optimized sketch. This uses the exact board geometry and ABI, but not firmware fuel, gamma, or power limiting.</p>
+    <label for="wasm">Sketch WASM</label>
+    <input id="wasm" type="file" accept=".wasm,application/wasm">
+    <p id="status">Choose a .wasm file to begin.</p>
+
+    <label>Encoder</label>
+    <div class="row"><button id="left">− detent</button><button id="right">+ detent</button><span id="position">0</span></div>
+    <label>Button</label>
+    <div class="row"><button id="button">Hold / release</button><button id="reload">Reset sketch</button></div>
+
+    <label>Audio bands</label>
+    <div class="bands" id="bands"></div>
+    <small>The simulator derives transient/sustain signals from these six values. Real microphone features have different dynamics.</small>
+  </aside>
+  <script type="module" src="simulator.js"></script>
+</body>
+</html>
+
