@@ -1,9 +1,8 @@
 # Phyllotaxis Sketch SDK
 
 Build tiny WebAssembly animations, audio-reactive art, and knob-controlled
-games for the 90-pixel Phyllotaxis LED board. A sketch is sandboxed, has no
-filesystem or network access, and can be written in any language that emits the
-[small ABI](docs/ABI.md).
+games for the 90-pixel Phyllotaxis LED board installed at Recurse Center. A sketch is sandboxed, has no
+filesystem or network access, and can be written in any language that emits the [small ABI](docs/ABI.md).
 
 Included starters:
 
@@ -35,8 +34,27 @@ Open `http://localhost:8000`, choose `dist/rust.wasm`, then edit
 ```
 
 Change `rust` to `c` or `assemblyscript` to use another starter. Configuration
-comes from `.phyllo.env` or environment variables. Use an empty slot from
-`./phyllo list`; uploading to an occupied slot replaces it atomically.
+comes from `.phyllo.env` beside the `phyllo` script (or from exported environment
+variables). If the file or a required value is missing, board commands prompt
+for it; the hostname defaults to `phyllotaxis.local`. To recreate the file:
+
+```sh
+cp .phyllo.env.example .phyllo.env
+```
+
+The example contains:
+
+```sh
+PHYLLO_HOST=phyllotaxis.local
+PHYLLO_SLOT=1
+PHYLLO_NAME=my-sketch
+PHYLLO_COLOR=#be28ff
+```
+
+Use an empty slot from `./phyllo list`. Before uploading, the command checks the
+board and refuses to replace a slot whose existing sketch has a different name;
+uploading the same name to the same slot remains supported. Prompted values
+apply to the current command only; save them in `.phyllo.env` to reuse them.
 
 ## Commands
 
@@ -74,4 +92,3 @@ for fuel and module limits.
 
 Read [Creating a sketch](docs/GUIDE.md), the exact [ABI reference](docs/ABI.md),
 and the [firmware API audit](docs/FIRMWARE_API_AUDIT.md).
-

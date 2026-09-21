@@ -8,6 +8,78 @@ if [ -r "$config_file" ]; then
     . "$config_file"
 fi
 
+config_help() {
+    printf 'Configuration file: %s\n' "$config_file" >&2
+    printf '%s\n' \
+        'Example:' \
+        '  PHYLLO_HOST=phyllotaxis.local' \
+        '  PHYLLO_SLOT=1' \
+        '  PHYLLO_NAME=my-sketch' \
+        '  PHYLLO_COLOR=#be28ff' >&2
+}
+
+prepare_board_config() {
+    if [ ! -r "$config_file" ]; then
+        printf 'No configuration file found; continuing with environment variables or prompts.\n' >&2
+        config_help
+    fi
+}
+
+prompt_value() {
+    prompt_text=$1
+    default_value=${2:-}
+    if [ ! -t 0 ]; then
+        return 1
+    fi
+    if [ -n "$default_value" ]; then
+        printf '%s [%s]: ' "$prompt_text" "$default_value" >&2
+    else
+        printf '%s: ' "$prompt_text" >&2
+    fi
+    IFS= read -r entered_value
+    prompted_value=${entered_value:-$default_value}
+}
+
+require_value() {
+    variable_name=$1
+    description=$2
+    current_value=$3
+    default_value=${4:-}
+    if [ -n "$current_value" ]; then
+        prompted_value=$current_value
+        return
+    fi
+    if prompt_value "$description" "$default_value" && [ -n "$prompted_value" ]; then
+        return
+    fi
+    if [ -n "$default_value" ]; then
+        prompted_value=$default_value
+        return
+    fi
+    printf '%s is required.\n' "$variable_name" >&2
+    config_help
+    exit 2
+}
+
+ensure_host() {
+    require_value PHYLLO_HOST 'PHYLLO_HOST (board hostname)' "${PHYLLO_HOST:-}" phyllotaxis.local
+    PHYLLO_HOST=$prompted_value
+}
+
+ensure_slot() {
+    require_value PHYLLO_SLOT 'PHYLLO_SLOT (0..99)' "${PHYLLO_SLOT:-}"
+    PHYLLO_SLOT=$prompted_value
+}
+
+ensure_upload_config() {
+    ensure_host
+    ensure_slot
+    require_value PHYLLO_NAME 'PHYLLO_NAME (sketch name)' "${PHYLLO_NAME:-}"
+    PHYLLO_NAME=$prompted_value
+    require_value PHYLLO_COLOR 'PHYLLO_COLOR (#rrggbb)' "${PHYLLO_COLOR:-}" '#be28ff'
+    PHYLLO_COLOR=$prompted_value
+}
+
 usage() {
     printf '%s\n' \
         'usage:' \
@@ -78,7 +150,7 @@ curl_api() {
 base_url() {
     case ${PHYLLO_HOST:-} in
         http://*|https://*) printf '%s' "${PHYLLO_HOST%/}" ;;
-        '') printf '%s\n' 'PHYLLO_HOST is not configured' >&2; exit 2 ;;
+        '') printf '%s\n' 'PHYLLO_HOST is not configured' >&2; config_help; exit 2 ;;
         *) printf 'http://%s' "${PHYLLO_HOST%/}" ;;
     esac
 }
@@ -136,7 +208,7 @@ case "$command_name" in
         rm -rf "$destination/target" "$destination/build" "$destination/node_modules"
         cp "$sdk_dir/phyllo" "$destination/phyllo"
         cp "$sdk_dir/.phyllo.env.example" "$destination/.phyllo.env.example"
-        cp "$sdk_dir/tools/check-wasm.mjs" "$sdk_dir/tools/positions.mjs" "$destination/tools/"
+        cp "$sdk_dir/tools/check-slot.mjs" "$sdk_dir/tools/check-wasm.mjs" "$sdk_dir/tools/positions.mjs" "$destination/tools/"
         cp "$sdk_dir/simulator/index.html" "$sdk_dir/simulator/simulator.js" "$destination/simulator/"
         printf 'created %s sketch in %s\n' "$language" "$destination"
         ;;
@@ -156,9 +228,9 @@ case "$command_name" in
         python3 -m http.server "$port" --bind 127.0.0.1
         ;;
     upload)
+        prepare_board_config
+        ensure_upload_config
         check_slot
-        output=$(build_target "${2:-}")
-        node "$sdk_dir/tools/check-wasm.mjs" "$output"
         name=${PHYLLO_NAME:-}
         color=${PHYLLO_COLOR:-#be28ff}
         case "$name" in ''|*[!A-Za-z0-9._-]*) printf '%s\n' 'PHYLLO_NAME is required and may contain only A-Z, a-z, 0-9, ., _, -' >&2; exit 2 ;; esac
@@ -167,15 +239,19 @@ case "$command_name" in
             \#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
             *) printf '%s\n' 'PHYLLO_COLOR must look like #be28ff' >&2; exit 2 ;;
         esac
+        sketches=$(curl_api "$(base_url)/api/sketches")
+        printf '%s' "$sketches" | node "$sdk_dir/tools/check-slot.mjs" "$PHYLLO_SLOT" "$name"
+        output=$(build_target "${2:-}")
+        node "$sdk_dir/tools/check-wasm.mjs" "$output"
         curl_api -X POST -H 'Content-Type: application/wasm' \
             -H "X-Phyllo-Color: $color" --data-binary "@$output" \
             "$(base_url)/api/sketches/$PHYLLO_SLOT/$name"
         printf '\n'
         ;;
-    list) curl_api "$(base_url)/api/sketches"; printf '\n' ;;
-    health) curl_api "$(base_url)/api/health"; printf '\n' ;;
-    run) check_slot; curl_api -X POST "$(base_url)/api/run/$PHYLLO_SLOT"; printf '\n' ;;
-    delete) check_slot; curl_api -X DELETE "$(base_url)/api/sketches/$PHYLLO_SLOT"; printf '\n' ;;
-    main) curl_api -X POST "$(base_url)/api/select/0"; printf '\n' ;;
+    list) prepare_board_config; ensure_host; curl_api "$(base_url)/api/sketches"; printf '\n' ;;
+    health) prepare_board_config; ensure_host; curl_api "$(base_url)/api/health"; printf '\n' ;;
+    run) prepare_board_config; ensure_host; ensure_slot; check_slot; curl_api -X POST "$(base_url)/api/run/$PHYLLO_SLOT"; printf '\n' ;;
+    delete) prepare_board_config; ensure_host; ensure_slot; check_slot; curl_api -X DELETE "$(base_url)/api/sketches/$PHYLLO_SLOT"; printf '\n' ;;
+    main) prepare_board_config; ensure_host; curl_api -X POST "$(base_url)/api/select/0"; printf '\n' ;;
     *) usage ;;
 esac
